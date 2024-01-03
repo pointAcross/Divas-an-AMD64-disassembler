@@ -19,6 +19,7 @@ char *section_header(struct e_64h head, FILE *file){
     return shname;
 }
 e_64Shdr get_section_by_name(char *text, FILE *file, struct e_64h head){
+    bool flag = 0;
     struct e_64Shdr shdr;
     char *shname;
     int iter;
@@ -33,6 +34,7 @@ e_64Shdr get_section_by_name(char *text, FILE *file, struct e_64h head){
         if (shdr.sh_name){
             name = shname + shdr.sh_name;
             if( (strcmp(text,"0")) == 0){
+                flag = 1;
                 char *type;
                 type = getType(shdr.sh_type);
                 char *flag;
@@ -40,63 +42,95 @@ e_64Shdr get_section_by_name(char *text, FILE *file, struct e_64h head){
                 printf("[%02d] %-20s %-8s %16x   %06x   %06x   %x   \t%-04s %02x  %x  %x\n",iter,name,type,shdr.sh_addr,shdr.sh_offset,shdr.sh_size,shdr.sh_entsize,flag,shdr.sh_link,shdr.sh_info,shdr.sh_addralign);
             }
             else{
-                if (strcmp(name, text) == 0)
-                {
+                if (strcmp(name, text) == 0){
+                    flag = 1;
                     printf("%s\n", name);
                     return shdr;
                     break;
                 }
+                else{
+                    flag = 0;
+                }
             }
         }
     }
+    if(flag == 0){
+        printf("[-]Section not found\n");
+    }
 }
-int main()
-{
-    struct e_64h head;
-    struct e_64Shdr shdr;
-    int i;
+uint8_t* get_bytes(char *shname,FILE *fp,e_64h head){
     uint8_t *bytes;
-    FILE *fp;
+    int i;
+    e_64Shdr shdr = get_section_by_name(shname,fp,head);
+    printf("Name: %d\n",shdr.sh_name);
+    bytes = malloc(shdr.sh_size);
+    fseeko(fp, shdr.sh_offset, SEEK_SET);
+    fread(bytes,1,shdr.sh_size,fp);// read bytes of the text section
+    for(i = 0;i<shdr.sh_size;i++){
+        printf("%02x ",bytes[i]);
+    }   
+    return bytes;
+
+}
+void disassemble(uint8_t *bytes){
     csh handle;
     cs_insn *insn;
     size_t count;
-    if (fp = fopen("def", "r"))
-    {
+    if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK){
+        printf("Error printing disassembly, please check capstone docs\n");
+        }
+    else{
+        count = cs_disasm(handle, bytes, sizeof(bytes) - 1, 0x1000,0,&insn);//RETURNS ERROR
+        if(count>0){
+            size_t j;
+            printf("\nDisassembly\n");
+            for(size_t i =0 ; i < count ; i++){
+                printf("0x%016jx: ", insn[i].address);
+                for(size_t j = 0; j < 16; j++){
+                    if(j < insn[i].size) printf("%02x ", insn[i].bytes[j]);
+                    else printf("    ");
+                }
+                printf("%-12s %s\n", insn[i].mnemonic, insn[i].op_str);
+                }
+            cs_free(insn, count);
+            cs_close(&handle);              
+            }
+            else{
+                printf("A failer occured in disassemble\n");
+            }
+    }
+}
+int main(int argv, char **argc){
+    struct e_64h head;
+    //struct e_64Shdr shdr;
+    int i;
+    uint8_t *bytes;
+    FILE *fp;
+    if (fp = fopen(argc[1], "r")){
         fread(&head, 1, sizeof(head), fp);
         // verifies the magic number (E_IDENT)
-        if (head.e_ident[0] == 0x7f && head.e_ident[1] == 'E' && head.e_ident[2] == 'L' && head.e_ident[3] == 'F')
-        {
+        if (head.e_ident[0] == 0x7f && head.e_ident[1] == 'E' && head.e_ident[2] == 'L' && head.e_ident[3] == 'F'){
             printf("\n[+] Elf Verified\n");
-            shdr = get_section_by_name(".text", fp, head);
-            bytes = malloc(shdr.sh_size);
-            fseeko(fp, shdr.sh_offset, SEEK_SET);
-            fread(bytes,1,shdr.sh_size,fp);// read bytes of the text section
-            get_section_by_name("0",fp,head);
-            for(i = 0;i<shdr.sh_size;i++){
-                printf("%02x ",bytes[i]);
+            if(strcmp("-s",argc[2]) == 0){
+                get_section_by_name("0",fp,head);
             }
-            if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK){
-                printf("Error printing disassembly, please check capstone docs\n");
-            }
-            else
-            {
-                count = cs_disasm(handle, bytes, sizeof(bytes) - 1, shdr.sh_addr,0,&insn);//RETURNS ERROR
-                if(count>0){
-                    size_t j;
-                    printf("\nDisassembly\n");
-                    for(j = 0; j<count;j++){
-                        printf("0x%"PRIx64":\t%s\t\t%s\n", insn[j].address, insn[j].mnemonic,insn[j].op_str);//absolutely gutting
-                    }
-                    cs_free(insn,count);
+            else if(strcmp("-b",argc[2]) == 0){
+                if(strlen(argc[3]) > 0){
+                    get_bytes(argc[3],fp,head);
                 }
                 else{
-                    printf("A failer occured in disassemble");
+                    printf("Usage [FILENAME] -b [SECTION-HEADER]\n");
+                    }
                 }
+            else if(strcmp("-d",argc[2]) == 0){
+                disassemble(get_bytes(".text",fp,head));
+            }
+            else{
+                printf("-s Print section headers\n-d Dissassemble (.text section)\n-b Print bytes (.text section)\n");
             }
         }
-        else
-        {
-            perror("\n[-] Bad ELF/ Not an ELF based file\n");
-        }
+    }
+    else{
+        perror("\n[-] Bad ELF/ Not an ELF based file\n");
     }
 }
